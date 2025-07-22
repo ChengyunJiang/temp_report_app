@@ -4,7 +4,13 @@ import numpy as np
 import os
 import matplotlib.pyplot as plt
 from datetime import datetime
-import sqlite3
+from sqlalchemy import create_engine
+
+DATABASE_URL = st.secrets["DATABASE_URL"]
+engine = create_engine(DATABASE_URL)
+
+# 在 upload 成功后保存：
+
 
 col_candidates = {
     "time": ["定位时间", "采集时间"],
@@ -46,7 +52,7 @@ if uploaded_files:
     if all_data.empty:
         st.error("⚠️ No valid data after processing! Please check file formats and required columns.")
         st.stop()
-        
+
     st.write("✅ Upload successful. Data preview:")
     # Statistics by container
     summary_stats = []
@@ -131,11 +137,5 @@ if uploaded_files:
 
         st.pyplot(fig)
     
-
-     # 🔔 Save to SQLite
-    os.makedirs("shared-data", exist_ok=True)
-    conn = sqlite3.connect("shared-data/latest_data.db")
-    all_data.to_sql("temperature_data", conn, if_exists="replace", index=False)
-    conn.close()
-
-    st.success("📂 Data saved to shared-data/latest_data.db")
+    all_data.to_sql("temperature_data", con=engine, if_exists="replace", index=False)
+    st.success("📂 Data saved to remote database")
