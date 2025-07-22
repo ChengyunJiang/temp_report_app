@@ -5,3 +5,5 @@ matplotlib
 openpyxl
 os
 sqlite3
+sqlalchemy
+psycopg2-binary
