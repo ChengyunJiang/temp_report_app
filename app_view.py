@@ -3,12 +3,15 @@ import pandas as pd
 import numpy as np
 import matplotlib.pyplot as plt
 from datetime import datetime
+import sqlite3
 
 st.set_page_config(layout="wide")
 st.title("📊 Temperature Analysis Viewer")
 
 try:
-    df = pd.read_csv("shared-data/latest_data.csv")
+    conn = sqlite3.connect("shared-data/latest_data.db")
+    df = pd.read_sql_query("SELECT * FROM temperature_data", conn)
+    conn.close()
 
     # 确保时间列正确解析并有 month 列
     df["time"] = pd.to_datetime(df["time"], errors="coerce")

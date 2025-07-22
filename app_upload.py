@@ -4,6 +4,7 @@ import numpy as np
 import os
 import matplotlib.pyplot as plt
 from datetime import datetime
+import sqlite3
 
 col_candidates = {
     "time": ["定位时间", "采集时间"],
@@ -30,8 +31,6 @@ if uploaded_files:
     for uploaded_file in uploaded_files:
         df = pd.read_excel(uploaded_file)
         df = dynamic_rename(df)
-        dfs.append(df)
-
         df = df[df["location"].notna() & (df["location"] != "")]
 
         # Parse datetime
@@ -39,12 +38,15 @@ if uploaded_files:
         df = df.dropna(subset=["time"])  # Remove bad rows
 
         df["month"] = df["time"].dt.strftime("%b")  # Month as abbreviated name (Jan, Feb, ...)
-
-        # Add container from filename
-        #df["container"] = uploaded_file.name.split(".")[0]
         dfs.append(df)
     
     all_data = pd.concat(dfs, ignore_index=True)
+    all_data = all_data.dropna(subset=["month"])
+
+    if all_data.empty:
+        st.error("⚠️ No valid data after processing! Please check file formats and required columns.")
+        st.stop()
+        
     st.write("✅ Upload successful. Data preview:")
     # Statistics by container
     summary_stats = []
@@ -130,9 +132,10 @@ if uploaded_files:
         st.pyplot(fig)
     
 
-    # 确保目录存在
-    os.makedirs("shared-data", exist_ok=True)   
+     # 🔔 Save to SQLite
+    os.makedirs("shared-data", exist_ok=True)
+    conn = sqlite3.connect("shared-data/latest_data.db")
+    all_data.to_sql("temperature_data", conn, if_exists="replace", index=False)
+    conn.close()
 
-    # 保存成共享文件（假设在同一服务器的 shared-data 目录）
-    all_data.to_csv("shared-data/latest_data.csv", index=False)
-    st.success("📂 Data saved to shared-data/latest_data.csv")
+    st.success("📂 Data saved to shared-data/latest_data.db")
