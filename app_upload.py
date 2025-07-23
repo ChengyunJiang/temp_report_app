@@ -8,7 +8,7 @@ from sqlalchemy import create_engine
 import pydeck as pdk
 
 #DATABASE_URL = st.secrets["DATABASE_URL"]
-DATABASE_URL = "postgresql://postgres.idtiedxkkknpmeuaklql:xyspog-wixto5-geMnaf@aws-0-eu-central-1.pooler.supabase.com:5432/postgres"
+
 engine = create_engine(DATABASE_URL)
 
 
