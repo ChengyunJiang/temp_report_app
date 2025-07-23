@@ -6,7 +6,7 @@ from datetime import datetime
 from sqlalchemy import create_engine
 import pydeck as pdk
 
-#DATABASE_URL = st.secrets["DATABASE_URL"]
+DATABASE_URL = st.secrets["DATABASE_URL"]
 
 engine = create_engine(DATABASE_URL)
 
@@ -181,7 +181,7 @@ try:
             ax.set_xlabel("Year-Month")
             ax.set_ylabel("Temperature (°C)")
             ax.legend()
-            
+
             ax.grid(False)
             plt.xticks(rotation=45)
             ax.spines["top"].set_visible(False)
