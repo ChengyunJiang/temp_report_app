@@ -5,8 +5,7 @@ import os
 import matplotlib.pyplot as plt
 from datetime import datetime
 from sqlalchemy import create_engine
-import sqlalchemy
-import psycopg2
+import pydeck as pdk
 
 #DATABASE_URL = st.secrets["DATABASE_URL"]
 DATABASE_URL = "postgresql://postgres.idtiedxkkknpmeuaklql:xyspog-wixto5-geMnaf@aws-0-eu-central-1.pooler.supabase.com:5432/postgres"
@@ -17,7 +16,9 @@ col_candidates = {
     "time": ["定位时间", "采集时间"],
     "temp": ["温度2", "温度 (°C)"],
     "container": ["箱号", "设备号"],
-    "location": ["国家", "国家/地区"]
+    "location": ["国家", "国家/地区"],
+    "lon": ["经度"],
+    "lat": ["纬度"]
 }
 
 def dynamic_rename(df):
@@ -116,14 +117,18 @@ if uploaded_files:
 
         # Calculate the duration of min_temp
         duration_hours = compute_multi_segment_duration_hm(group)
+        #print(group["lon"])
+        out_of_range = (group["temp"] < 0) | (group["temp"] > 25)
+        percent_out = 100 * out_of_range.sum() / len(group)
 
         summary_stats.append({
             "container": container_id,
-            "avg_temp": avg_temp,
-            "min_temp": min_temp,
-            "max_temp": max_temp,
-            "hours_below_0": hours_below_0,
-            "duration_of_min": duration_hours
+            "avg_temp": f"{avg_temp:.1f}°C",
+            "min_temp": f"{min_temp:.1f}°C" + (" ❄️" if min_temp < 0 else ""),
+            "max_temp": f"{max_temp:.1f}°C" + (" 🔥" if min_temp > 30 else ""),
+            "hours_below_0": f"{hours_below_0}h" + ("⚠️" if hours_below_0 >= 8 else ""),
+            "out_of_range(0-25°C)": f"{percent_out:.1f}%",
+            "duration_of_mintemp(h:m)": duration_hours
         })
 
     summary_stats_df = pd.DataFrame(summary_stats)
@@ -164,37 +169,121 @@ if uploaded_files:
     summary_tbl["Low_Location"] = summary_tbl["Low_Location"].replace("中国", "China")
 
     # Layout tabs
-    tab1, tab2 = st.tabs(["Summary Table", "Temperature Plot"])
+    tab1, tab2, tab3 = st.tabs(["Summary Table", "Temperature Plot", "Map"])
 
     with tab1:
         st.subheader("Statistics by Month")
         st.dataframe(summary_tbl)
 
         st.subheader("Statistics by Container")
-        #st.dataframe(summary_stats_df)
         st.dataframe(styled_df, use_container_width=True)
 
     with tab2:
-        # Prepare plot data
-        plot_data = pd.melt(
-            summary_tbl,
-            id_vars=["month"],
-            value_vars=["High_Temp", "Low_Temp"],
-            var_name="Type",
-            value_name="Temp"
-        )
+            all_data["year_month"] = all_data["time"].dt.to_period("M").astype(str)
+            high_temp = (
+                all_data.loc[all_data.groupby("year_month")["temp"].idxmax()]
+                [["year_month", "temp", "location"]]
+                .rename(columns={"temp": "High_Temp", "location": "High_Location"})
+            )
+            low_temp = (
+                all_data.loc[all_data.groupby("year_month")["temp"].idxmin()]
+                [["year_month", "temp", "location"]]
+                .rename(columns={"temp": "Low_Temp", "location": "Low_Location"})
+            )
+            summary_tbl = pd.merge(high_temp, low_temp, on="year_month", how="outer")
+            summary_tbl = summary_tbl.dropna(subset=["year_month"])
+            summary_tbl = summary_tbl.sort_values("year_month")
 
-        fig, ax = plt.subplots(figsize=(10, 6))
-        for key, grp in plot_data.groupby("Type"):
-            ax.plot(grp["month"], grp["Temp"], marker='o', label=key)
+            fig, ax = plt.subplots(figsize=(10, 6))
+            colors = {
+             "High_Temp": "#F28C8C",   # 柔和红 Coral Pink
+             "Low_Temp": "#84C2F2"     # 柔和蓝 Sky Blue
+            }
+            plot_data = pd.melt( summary_tbl, id_vars=["year_month"], value_vars=["High_Temp", "Low_Temp"], 
+                                var_name="Type", value_name="Temp")
+            
+            fig, ax = plt.subplots(figsize=(10, 6))
+            for key, grp in plot_data.groupby("Type"):
+                ax.plot(grp["year_month"], grp["Temp"], marker='o', label="High" if "High" in key else "Low", color=colors[key])
+                for x, y in zip(grp["year_month"], grp["Temp"]):
+                    ax.text(x, y + 0.3, f"{y:.1f}°C", ha='center', fontsize=8, color=colors[key])
 
-        ax.set_title("Monthly High and Low Temperatures")
-        ax.set_xlabel("Month")
-        ax.set_ylabel("Temperature (°C)")
-        ax.legend()
-        ax.grid(True)
+            ax.set_title("Monthly High and Low Temperatures")
+            ax.set_xlabel("Year-Month")
+            ax.set_ylabel("Temperature (°C)")
+            ax.legend()
+            
+            ax.grid(False)
+            plt.xticks(rotation=45)
+            ax.spines["top"].set_visible(False)
+            ax.spines["right"].set_visible(False)
+            st.pyplot(fig)
 
-        st.pyplot(fig)
-    
+    with tab3:
+            st.subheader("Monthly Highs and Lows per Container")
+
+            # 获取每个 container 每月的最高温和最低温对应的行
+            high_points = all_data.loc[all_data.groupby(["month", "container"])["temp"].idxmax()]
+            low_points = all_data.loc[all_data.groupby(["month", "container"])["temp"].idxmin()]
+
+            high_points = high_points.copy()
+            high_points["type"] = "High"
+
+            low_points = low_points.copy()
+            low_points["type"] = "Low"
+
+            # 合并
+            map_points = pd.concat([high_points, low_points])
+            map_points = map_points.dropna(subset=["lat", "lon"])
+
+            # ✨ 添加 popup label
+            map_points["text"] = (
+                map_points["type"] + " | " +
+                map_points["container"] + " | " +
+                map_points["month"] + " | " +
+                map_points["temp"].round(1).astype(str) + "°C"
+            )
+
+            # ✨ 颜色渐变（低温蓝，高温红）
+            def temp_to_color(temp, min_t, max_t):
+                norm = (temp - min_t) / (max_t - min_t + 1e-6)
+                r = int(255 * norm)
+                g = int(255 * (1 - norm))
+                b = int(255 * (1 - norm))
+                return [r, g, b]
+
+            min_temp = map_points["temp"].min()
+            max_temp = map_points["temp"].max()
+            map_points["color"] = map_points["temp"].apply(lambda t: temp_to_color(t, min_temp, max_temp))
+            
+
+            layer = pdk.Layer(
+                "ScatterplotLayer",
+                data=map_points,
+                get_position='[lon, lat]',
+                get_color='color',
+                get_radius=20000,
+                pickable=True,
+                tooltip=True
+            )
+
+            view_state = pdk.ViewState(
+                latitude=map_points["lat"].mean(),
+                longitude=map_points["lon"].mean(),
+                zoom=3,
+                pitch=0
+            )
+
+            r = pdk.Deck(
+                layers=[layer],
+                initial_view_state=view_state,
+                tooltip={"text": "{text}"}
+            )
+
+            st.pydeck_chart(r)
+
+            with st.expander("📋 View raw data"):
+                st.dataframe(map_points[["month", "container", "type", "temp", "lat", "lon"]])
+
     all_data.to_sql("temperature_data", con=engine, if_exists="replace", index=False)
     st.success("📂 Data saved to remote database")
