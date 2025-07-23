@@ -1,0 +1,17 @@
+[server]
+headless = true
+enableCORS = false
+enableXsrfProtection = false
+runOnSave = true
+
+[client]
+showErrorDetails = false
+toolbarMode = "minimal"
+
+[theme]
+base = "light"
+primaryColor = "#FF9478"
+backgroundColor = "#FDFDFD"
+secondaryBackgroundColor = "#FAFAFA"
+textColor = "#333333"
+font = "sans serif"
