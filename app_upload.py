@@ -5,11 +5,12 @@ import os
 import matplotlib.pyplot as plt
 from datetime import datetime
 from sqlalchemy import create_engine
+import sqlalchemy
+import psycopg2
 
-DATABASE_URL = st.secrets["DATABASE_URL"]
+#DATABASE_URL = st.secrets["DATABASE_URL"]
+DATABASE_URL = "postgresql://postgres.idtiedxkkknpmeuaklql:xyspog-wixto5-geMnaf@aws-0-eu-central-1.pooler.supabase.com:5432/postgres"
 engine = create_engine(DATABASE_URL)
-
-# 在 upload 成功后保存：
 
 
 col_candidates = {
@@ -27,6 +28,53 @@ def dynamic_rename(df):
                 rename_map[c] = std_col
                 break
     return df.rename(columns=rename_map)
+
+def compute_multi_segment_duration_hm(group, threshold=1.0, gap_multiplier=2):
+    min_temp = group["temp"].min()
+    near_min = group[np.abs(group["temp"] - min_temp) <= threshold].sort_values("time")
+
+    if near_min.empty:
+        return "near_min empty0:00"
+
+    near_min = near_min.reset_index(drop=True)
+
+    # 自动推断采样间隔（中位数间隔）
+    time_diffs = near_min["time"].diff().dropna()
+    if time_diffs.empty:
+        return "time_diffs 0:00"
+
+    typical_gap = time_diffs.median()
+    max_allowed_gap = typical_gap * gap_multiplier  # 允许的最大间隔
+
+    total_seconds = 0
+    segment_start = near_min.loc[0, "time"]
+
+    print("正在处理 container:", group["container"].iloc[0])
+    print("最小温度:", min_temp)
+    print("near_min 条数:", len(near_min))
+    print("time span:", near_min["time"].min(), "→", near_min["time"].max())
+
+    for i in range(1, len(near_min)):
+        current_time = near_min.loc[i, "time"]
+        previous_time = near_min.loc[i - 1, "time"]
+        #print(f"⏱ Gap between {previous_time} and {current_time}: {(current_time - previous_time)}")
+
+        if (current_time - previous_time) > max_allowed_gap:
+            # 超过合理间隔，断段
+            total_seconds += (previous_time - segment_start).total_seconds()
+            segment_start = current_time
+
+    # 最后一段
+    total_seconds += (near_min.iloc[-1]["time"] - segment_start).total_seconds()
+
+    # 转换为小时:分钟
+    total_minutes = int(total_seconds // 60)
+    hours = total_minutes // 60
+    minutes = total_minutes % 60
+
+    return f"{hours}:{minutes:02d}"
+
+
 
 st.title("🔒 Internal Upload Portal")
 
@@ -48,6 +96,9 @@ if uploaded_files:
     
     all_data = pd.concat(dfs, ignore_index=True)
     all_data = all_data.dropna(subset=["month"])
+    all_data["container"] = all_data["container"].astype(str)
+    all_data["location"] = all_data["location"].astype(str)
+
 
     if all_data.empty:
         st.error("⚠️ No valid data after processing! Please check file formats and required columns.")
@@ -63,9 +114,8 @@ if uploaded_files:
         max_temp = group["temp"].max()
         hours_below_0 = np.sum(group["temp"] < 0) * 2
 
-        # 正确统计 duration：只在当前 container 内
-        close_to_min = group[np.abs(group["temp"] - min_temp) <= 1]
-        duration_hours = len(close_to_min) * 2
+        # Calculate the duration of min_temp
+        duration_hours = compute_multi_segment_duration_hm(group)
 
         summary_stats.append({
             "container": container_id,
@@ -77,6 +127,15 @@ if uploaded_files:
         })
 
     summary_stats_df = pd.DataFrame(summary_stats)
+
+    def highlight_negative_min_temp(val):
+        if isinstance(val, (int, float)) and val < 0:
+            return "background-color: lightcoral; color: white"
+        return ""
+
+    styled_df = summary_stats_df.style.applymap(highlight_negative_min_temp, subset=["min_temp"])
+
+
 
 
     # Statistics by month: Highs
@@ -101,7 +160,6 @@ if uploaded_files:
     summary_tbl = summary_tbl.dropna(subset=["month"])
     summary_tbl = summary_tbl.sort_values(by="month", key=lambda x: pd.to_datetime(x, format="%b"))
 
-    # Replace "中国" with "China"
     summary_tbl["High_Location"] = summary_tbl["High_Location"].replace("中国", "China")
     summary_tbl["Low_Location"] = summary_tbl["Low_Location"].replace("中国", "China")
 
@@ -113,7 +171,8 @@ if uploaded_files:
         st.dataframe(summary_tbl)
 
         st.subheader("Statistics by Container")
-        st.dataframe(summary_stats_df)
+        #st.dataframe(summary_stats_df)
+        st.dataframe(styled_df, use_container_width=True)
 
     with tab2:
         # Prepare plot data
