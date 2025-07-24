@@ -6,9 +6,18 @@ import matplotlib.pyplot as plt
 from datetime import datetime
 from sqlalchemy import create_engine
 import pydeck as pdk
+from sqlalchemy import MetaData, Table
+from sqlalchemy.dialects.postgresql import insert
+
+def insert_unique_data(df, engine):
+    with engine.begin() as conn:
+        rows = df.to_dict(orient="records")
+        stmt = insert(all_data_table).values(rows)
+        stmt = stmt.on_conflict_do_nothing(index_elements=['container', 'time', 'temp', 'location'])
+        conn.execute(stmt)
+
 
 DATABASE_URL = st.secrets["DATABASE_URL"]
-
 engine = create_engine(DATABASE_URL)
 
 
@@ -90,7 +99,7 @@ if uploaded_files:
     all_data["container"] = all_data["container"].astype(str)
     all_data["location"] = all_data["location"].astype(str)
 
-
+    
     if all_data.empty:
         st.error("⚠️ No valid data after processing! Please check file formats and required columns.")
         st.stop()
@@ -114,9 +123,8 @@ if uploaded_files:
         all_data_with_dates["departure_date"].dt.strftime("%Y-%m-%d") + " → " +
         all_data_with_dates["arrival_date"].dt.strftime("%Y-%m-%d")
     )
-
+    
     # 按 group_id 分组
-
     for group_id, group in all_data_with_dates.groupby("group_id"):
         container_id = group["container"].iloc[0]
         departure_date = group["departure_date"].iloc[0].strftime("%Y-%m-%d")
@@ -310,5 +318,30 @@ if uploaded_files:
             with st.expander("📋 View raw data"):
                 st.dataframe(map_points[["month", "container", "type", "temp", "lat", "lon"]])
 
-    all_data.to_sql("temperature_data", con=engine, if_exists="replace", index=False)
-    st.success("📂 Data saved to remote database")
+    #all_data.to_sql("temperature_data", con=engine, if_exists="replace", index=False)
+    #all_data.to_sql("temperature_data", con=engine, if_exists="append", index=False)
+
+    
+
+    meta = MetaData()
+    meta.reflect(bind=engine)
+
+    all_data_table = meta.tables["temperature_data"]
+    columns_to_keep = ["container", "temp", "lon", "lat", "location", "time", "month", "year_month"]
+    cleaned_data = all_data[columns_to_keep]
+    
+    status_placeholder = st.empty() 
+    status_placeholder.info(f"📊 Inserting {len(cleaned_data)} rows...")
+
+    insert_unique_data(cleaned_data, engine)
+    status_placeholder.success("📂 Data saved to remote database")
+
+hide_streamlit_style = """
+    <style>
+    #MainMenu {visibility: hidden;}
+    footer {visibility: hidden;}
+    header {visibility: hidden;}
+    .css-1dp5vir {display: none;}  /* GitHub button（如果有） */
+    </style>
+"""
+st.markdown(hide_streamlit_style, unsafe_allow_html=True)
