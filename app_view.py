@@ -7,7 +7,6 @@ from sqlalchemy import create_engine
 import pydeck as pdk
 
 DATABASE_URL = st.secrets["DATABASE_URL"]
-
 engine = create_engine(DATABASE_URL)
 
 def compute_multi_segment_duration_hm(group, threshold=1.0, gap_multiplier=2):
@@ -91,28 +90,54 @@ try:
     if df_filtered.empty:
         st.info("⚠️ No data matches current filter.")
     else:
+        # Statistics by container
         summary_stats = []
-        for container_id, group in df_filtered.groupby("container"):
+        grouped = (df_filtered.copy().sort_values("time").groupby("container"))
+
+        records = []
+
+        for container_id, group in grouped:
+            group = group.copy()
+            group["departure_date"] = group["time"].min().normalize()
+            group["arrival_date"] = group["time"].max().normalize()
+            records.append(group)
+
+        all_data_with_dates = pd.concat(records)
+        all_data_with_dates["group_id"] = (
+            all_data_with_dates["container"] + " | " +
+            all_data_with_dates["departure_date"].dt.strftime("%Y-%m-%d") + " → " +
+            all_data_with_dates["arrival_date"].dt.strftime("%Y-%m-%d")
+        )
+
+    # 按 group_id 分组
+
+        for group_id, group in all_data_with_dates.groupby("group_id"):
+            container_id = group["container"].iloc[0]
+            departure_date = group["departure_date"].iloc[0].strftime("%Y-%m-%d")
+            arrival_date = group["arrival_date"].iloc[0].strftime("%Y-%m-%d")
+
             avg_temp = group["temp"].mean()
             min_temp = group["temp"].min()
             max_temp = group["temp"].max()
             hours_below_0 = np.sum(group["temp"] < 0) * 2
-
             duration_hours = compute_multi_segment_duration_hm(group)
             out_of_range = (group["temp"] < 0) | (group["temp"] > 25)
             percent_out = 100 * out_of_range.sum() / len(group)
 
             summary_stats.append({
-                "container": container_id,
-                "avg_temp": avg_temp,
-                #"min_temp": min_temp,
-                "min_temp": f"{min_temp:.1f}°C" + (" ❄️" if min_temp < 0 else ""),
-                "max_temp": max_temp,
-                "hours_below_0": f"{hours_below_0}h" + ("⚠️" if hours_below_0 >= 8 else ""),
-                "out_of_range(%)": f"{percent_out:.1f}%",
-                "duration_of_mintemp(h:m)": duration_hours
+            "container": container_id,
+            "departure_date": departure_date,
+            "arrival_date": arrival_date,
+            "avg_temp": f"{avg_temp:.1f}°C",
+            "min_temp": f"{min_temp:.1f}°C" + (" ❄️" if min_temp < 0 else ""),
+            "max_temp": f"{max_temp:.1f}°C" + (" 🔥" if min_temp > 30 else ""),
+            "hours_below_0": f"{hours_below_0}h" + ("⚠️" if hours_below_0 >= 8 else ""),
+            "out_of_range(0-25°C)": f"{percent_out:.1f}%",
+            "duration_of_mintemp(h:m)": duration_hours
             })
+
         summary_df = pd.DataFrame(summary_stats)
+        summary_df = summary_df.sort_values(by=["departure_date", "container"])
 
         high_temp = (
             df_filtered

@@ -35,14 +35,14 @@ def compute_multi_segment_duration_hm(group, threshold=1.0, gap_multiplier=2):
     near_min = group[np.abs(group["temp"] - min_temp) <= threshold].sort_values("time")
 
     if near_min.empty:
-        return "near_min empty0:00"
+        return "1:00"
 
     near_min = near_min.reset_index(drop=True)
 
     # 自动推断采样间隔（中位数间隔）
     time_diffs = near_min["time"].diff().dropna()
     if time_diffs.empty:
-        return "time_diffs 0:00"
+        return "0:00"
 
     typical_gap = time_diffs.median()
     max_allowed_gap = typical_gap * gap_multiplier  # 允许的最大间隔
@@ -50,32 +50,21 @@ def compute_multi_segment_duration_hm(group, threshold=1.0, gap_multiplier=2):
     total_seconds = 0
     segment_start = near_min.loc[0, "time"]
 
-    print("正在处理 container:", group["container"].iloc[0])
-    print("最小温度:", min_temp)
-    print("near_min 条数:", len(near_min))
-    print("time span:", near_min["time"].min(), "→", near_min["time"].max())
-
     for i in range(1, len(near_min)):
         current_time = near_min.loc[i, "time"]
         previous_time = near_min.loc[i - 1, "time"]
-        #print(f"⏱ Gap between {previous_time} and {current_time}: {(current_time - previous_time)}")
 
         if (current_time - previous_time) > max_allowed_gap:
-            # 超过合理间隔，断段
             total_seconds += (previous_time - segment_start).total_seconds()
             segment_start = current_time
 
-    # 最后一段
     total_seconds += (near_min.iloc[-1]["time"] - segment_start).total_seconds()
 
-    # 转换为小时:分钟
     total_minutes = int(total_seconds // 60)
     hours = total_minutes // 60
     minutes = total_minutes % 60
 
     return f"{hours}:{minutes:02d}"
-
-
 
 st.title("🔒 Internal Upload Portal")
 
@@ -97,6 +86,7 @@ if uploaded_files:
     
     all_data = pd.concat(dfs, ignore_index=True)
     all_data = all_data.dropna(subset=["month"])
+    all_data = all_data[(all_data["location"].notna()) & (all_data["location"] != "-")]
     all_data["container"] = all_data["container"].astype(str)
     all_data["location"] = all_data["location"].astype(str)
 
@@ -108,21 +98,42 @@ if uploaded_files:
     st.write("✅ Upload successful. Data preview:")
     # Statistics by container
     summary_stats = []
+    grouped = (all_data.copy().sort_values("time").groupby("container"))
 
-    for container_id, group in all_data.groupby("container"):
+    records = []
+
+    for container_id, group in grouped:
+        group = group.copy()
+        group["departure_date"] = group["time"].min().normalize()
+        group["arrival_date"] = group["time"].max().normalize()
+        records.append(group)
+
+    all_data_with_dates = pd.concat(records)
+    all_data_with_dates["group_id"] = (
+        all_data_with_dates["container"] + " | " +
+        all_data_with_dates["departure_date"].dt.strftime("%Y-%m-%d") + " → " +
+        all_data_with_dates["arrival_date"].dt.strftime("%Y-%m-%d")
+    )
+
+    # 按 group_id 分组
+
+    for group_id, group in all_data_with_dates.groupby("group_id"):
+        container_id = group["container"].iloc[0]
+        departure_date = group["departure_date"].iloc[0].strftime("%Y-%m-%d")
+        arrival_date = group["arrival_date"].iloc[0].strftime("%Y-%m-%d")
+
         avg_temp = group["temp"].mean()
         min_temp = group["temp"].min()
         max_temp = group["temp"].max()
         hours_below_0 = np.sum(group["temp"] < 0) * 2
-
-        # Calculate the duration of min_temp
         duration_hours = compute_multi_segment_duration_hm(group)
-        #print(group["lon"])
         out_of_range = (group["temp"] < 0) | (group["temp"] > 25)
         percent_out = 100 * out_of_range.sum() / len(group)
 
         summary_stats.append({
             "container": container_id,
+            "departure_date": departure_date,
+            "arrival_date": arrival_date,
             "avg_temp": f"{avg_temp:.1f}°C",
             "min_temp": f"{min_temp:.1f}°C" + (" ❄️" if min_temp < 0 else ""),
             "max_temp": f"{max_temp:.1f}°C" + (" 🔥" if min_temp > 30 else ""),
@@ -130,19 +141,14 @@ if uploaded_files:
             "out_of_range(0-25°C)": f"{percent_out:.1f}%",
             "duration_of_mintemp(h:m)": duration_hours
         })
-
     summary_stats_df = pd.DataFrame(summary_stats)
+    summary_stats_df = summary_stats_df.sort_values(by=["departure_date", "container"])
 
     def highlight_negative_min_temp(val):
         if isinstance(val, (int, float)) and val < 0:
             return "background-color: lightcoral; color: white"
         return ""
-
-    styled_df = summary_stats_df.style.applymap(highlight_negative_min_temp, subset=["min_temp"])
-
-
-
-
+        
     # Statistics by month: Highs
     high_temp = (
         all_data
@@ -159,10 +165,10 @@ if uploaded_files:
         .rename(columns={"temp": "Low_Temp", "location": "Low_Location"})
     )
 
-
     # Merge summary
     summary_tbl = pd.merge(high_temp, low_temp, on="month", how="outer")
     summary_tbl = summary_tbl.dropna(subset=["month"])
+
     summary_tbl = summary_tbl.sort_values(by="month", key=lambda x: pd.to_datetime(x, format="%b"))
 
     summary_tbl["High_Location"] = summary_tbl["High_Location"].replace("中国", "China")
@@ -176,28 +182,38 @@ if uploaded_files:
         st.dataframe(summary_tbl)
 
         st.subheader("Statistics by Container")
-        st.dataframe(styled_df, use_container_width=True)
+        #st.dataframe(styled_df, use_container_width=True)
+        st.dataframe(summary_stats_df)
 
     with tab2:
             all_data["year_month"] = all_data["time"].dt.to_period("M").astype(str)
+
+            # 清理无效行（例如 temp 为 NaN）
+            valid_data = all_data.dropna(subset=["temp"])
+
+            # 计算每月高低温
+            max_idx = valid_data.groupby("year_month")["temp"].idxmax().dropna()
+            min_idx = valid_data.groupby("year_month")["temp"].idxmin().dropna()
+
             high_temp = (
-                all_data.loc[all_data.groupby("year_month")["temp"].idxmax()]
+                valid_data.loc[valid_data.groupby("year_month")["temp"].idxmax()]
                 [["year_month", "temp", "location"]]
                 .rename(columns={"temp": "High_Temp", "location": "High_Location"})
             )
             low_temp = (
-                all_data.loc[all_data.groupby("year_month")["temp"].idxmin()]
+                valid_data.loc[valid_data.groupby("year_month")["temp"].idxmin()]
                 [["year_month", "temp", "location"]]
                 .rename(columns={"temp": "Low_Temp", "location": "Low_Location"})
             )
+
             summary_tbl = pd.merge(high_temp, low_temp, on="year_month", how="outer")
             summary_tbl = summary_tbl.dropna(subset=["year_month"])
             summary_tbl = summary_tbl.sort_values("year_month")
 
             fig, ax = plt.subplots(figsize=(10, 6))
             colors = {
-             "High_Temp": "#F28C8C",   # 柔和红 Coral Pink
-             "Low_Temp": "#84C2F2"     # 柔和蓝 Sky Blue
+             "High_Temp": "#F28C8C",   # Coral Pink
+             "Low_Temp": "#84C2F2"     # Sky Blue
             }
             plot_data = pd.melt( summary_tbl, id_vars=["year_month"], value_vars=["High_Temp", "Low_Temp"], 
                                 var_name="Type", value_name="Temp")
@@ -223,8 +239,17 @@ if uploaded_files:
             st.subheader("Monthly Highs and Lows per Container")
 
             # 获取每个 container 每月的最高温和最低温对应的行
-            high_points = all_data.loc[all_data.groupby(["month", "container"])["temp"].idxmax()]
-            low_points = all_data.loc[all_data.groupby(["month", "container"])["temp"].idxmin()]
+            valid_data = all_data.dropna(subset=["year_month", "container", "temp"])
+
+            high_idx = valid_data.groupby(["year_month", "container"])["temp"].idxmax().dropna()
+            low_idx = valid_data.groupby(["year_month", "container"])["temp"].idxmin().dropna()
+
+            high_points = valid_data.loc[high_idx].copy()
+            high_points["type"] = "High"
+
+            low_points = valid_data.loc[low_idx].copy()
+            low_points["type"] = "Low"
+
 
             high_points = high_points.copy()
             high_points["type"] = "High"
@@ -240,7 +265,7 @@ if uploaded_files:
             map_points["text"] = (
                 map_points["type"] + " | " +
                 map_points["container"] + " | " +
-                map_points["month"] + " | " +
+                map_points["year_month"] + " | " +
                 map_points["temp"].round(1).astype(str) + "°C"
             )
 
