@@ -312,3 +312,4 @@ with st.spinner("Loading data, please wait..."):
         st.error(TEXT[lang]["db_error"])
     except Exception:
         st.error(TEXT[lang]["unknown_error"])
+        st.info("The database is empty, pleae upload data first.")
