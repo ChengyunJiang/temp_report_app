@@ -9,8 +9,8 @@ from sqlalchemy import create_engine, text
 from sqlalchemy import MetaData, Table
 from sqlalchemy.dialects.postgresql import insert
 
-DATABASE_URL = "postgresql://postgres.idtiedxkkknpmeuaklql:xyspog-wixto5-geMnaf@aws-0-eu-central-1.pooler.supabase.com:6543/postgres"
-#DATABASE_URL = st.secrets["DATABASE_URL"]
+
+DATABASE_URL = st.secrets["DATABASE_URL"]
 engine = create_engine(DATABASE_URL)
 
 
