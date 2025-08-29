@@ -16,9 +16,9 @@ engine = create_engine(DATABASE_URL)
 
 col_candidates = {
     "time": ["定位时间", "采集时间"],
-    "temp": ["温度2", "温度 (°C)"],
+    "temp": ["温度2", "温度 (°C)", "温度 (°C)"],
     "container": ["箱号", "设备号"],
-    "location": ["国家", "国家/地区"],
+    "location": ["国家", "国家/地区", "国家/地区"],
     "lon": ["经度"],
     "lat": ["纬度"]
 }
@@ -111,12 +111,7 @@ st.markdown(hide_streamlit_style, unsafe_allow_html=True)
 ##--------------------------Layout of MainPage------------------------------------------
 st.title("🔒 Internal Upload Portal")
 
-uploaded_files = st.file_uploader("Upload Excel files", accept_multiple_files=True, type=["xlsx"])
-
-#customer_list = ["alice@client.com", "bob@client.com", "carol@client.com"]
-
-#selected_customer = st.selectbox("Please select the client", customer_list)
-
+uploaded_files = st.file_uploader("📂 Upload files (.xlsx or .csv)", accept_multiple_files=True, type=["xlsx","csv"])
 with st.expander("Delete Container Data"):
     try:
         with engine.connect() as conn:
@@ -160,7 +155,15 @@ if uploaded_files:
     status_placeholder = st.info("Data Processing...") 
     dfs = []
     for uploaded_file in uploaded_files:
-        df = pd.read_excel(uploaded_file)
+        # 获取文件扩展名（小写）
+        ext = os.path.splitext(uploaded_file.name)[1].lower()
+        if ext == ".csv":
+            df = pd.read_csv(uploaded_file)
+        elif ext in [".xlsx", ".xls"]:
+            df = pd.read_excel(uploaded_file)
+        else:
+            st.error(f"❌ Unsupported file type: {uploaded_file.name}")
+            continue
         df = dynamic_rename(df)
         df = df[df["location"].notna() & (df["location"] != "-")]
         df = df.dropna(subset=["temp"])
